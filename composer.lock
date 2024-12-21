@@ -1,0 +1,85 @@
+{
+    "_readme": [
+        "This file locks the dependencies of your project to a known state",
+        "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
+        "This file is @generated automatically"
+    ],
+    "content-hash": "2ba6760de5972f42d0257b2e394d350b",
+    "packages": [
+        {
+            "name": "arraypress/ipqualityscore",
+            "version": "dev-main",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/arraypress/ipqualityscore.git",
+                "reference": "993f6250cecd3c02cc3a9bdc173a775bc19dedf8"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/arraypress/ipqualityscore/zipball/993f6250cecd3c02cc3a9bdc173a775bc19dedf8",
+                "reference": "993f6250cecd3c02cc3a9bdc173a775bc19dedf8",
+                "shasum": ""
+            },
+            "require": {
+                "php": "^7.4 || ^8.0"
+            },
+            "default-branch": true,
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "ArrayPress\\IPQualityScore\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "GPL-2.0-or-later"
+            ],
+            "authors": [
+                {
+                    "name": "David Sherlock",
+                    "homepage": "https://arraypress.com/"
+                }
+            ],
+            "description": "A PHP library for integrating with the IPQualityScore API in WordPress, providing proxy, VPN & email validation, phone verification, dark web monitoring, URL scanning, and fraud prevention. Features comprehensive response handling and WordPress transient caching.",
+            "homepage": "https://github.com/arraypress/ipqualityscore/",
+            "keywords": [
+                "anti-fraud",
+                "asn",
+                "dark-web-monitoring",
+                "data-breach",
+                "email-validation",
+                "email-verification",
+                "fraud-prevention",
+                "ip-lookup",
+                "ipqualityscore",
+                "leak-detection",
+                "phone-verification",
+                "proxy-detection",
+                "security",
+                "threat-detection",
+                "transaction-scoring",
+                "url-scanning",
+                "vpn-detection",
+                "wordpress"
+            ],
+            "support": {
+                "issues": "https://github.com/arraypress/ipqualityscore/issues",
+                "source": "https://github.com/arraypress/ipqualityscore"
+            },
+            "time": "2024-12-09T19:54:28+00:00"
+        }
+    ],
+    "packages-dev": [],
+    "aliases": [],
+    "minimum-stability": "dev",
+    "stability-flags": {
+        "arraypress/ipqualityscore": 20
+    },
+    "prefer-stable": true,
+    "prefer-lowest": false,
+    "platform": {
+        "php": "^7.4 || ^8.0"
+    },
+    "platform-dev": {},
+    "plugin-api-version": "2.6.0"
+}

@@ -16,6 +16,8 @@
 
 namespace ArrayPress\IPQualityScore;
 
+use Exception;
+
 defined( 'ABSPATH' ) || exit;
 
 /**
@@ -42,13 +44,36 @@ class Plugin {
 		// Initialize client if key is set
 		$key = get_option( 'ipqualityscore_api_key' );
 		if ( $key ) {
-			$this->client = new Client( $key );
+			$this->client = new Client( $key, false );
 		}
 
 		// Hook into WordPress
 		add_action( 'admin_menu', [ $this, 'add_admin_menu' ] );
 		add_action( 'admin_init', [ $this, 'register_settings' ] );
 		add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_admin_styles' ] );
+
+		// Add AJAX handlers
+		add_action( 'wp_ajax_ipqs_report_fraud', [ $this, 'handle_report_fraud' ] );
+	}
+
+	/**
+	 * Handle fraud report AJAX request
+	 */
+	public function handle_report_fraud() {
+		check_ajax_referer( 'ipqs_report_fraud', 'nonce' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( 'Unauthorized' );
+		}
+
+		$request_id = sanitize_text_field( $_POST['request_id'] );
+
+		try {
+			$result = $this->client->report_request( $request_id );
+			wp_send_json_success( $result );
+		} catch ( \Exception $e ) {
+			wp_send_json_error( $e->getMessage() );
+		}
 	}
 
 	/**
@@ -249,30 +274,498 @@ class Plugin {
                        data-tab="leak">
                         Data Leak Check
                     </a>
+                    <a href="#" class="nav-tab <?php echo $current_test_type === 'url' ? 'nav-tab-active' : ''; ?>"
+                       data-tab="url">
+                        URL Scanner
+                    </a>
+                    <a href="#" class="nav-tab <?php echo $current_test_type === 'history' ? 'nav-tab-active' : ''; ?>"
+                       data-tab="history">
+                        Request History
+                    </a>
+<!--                    <a href="#" class="nav-tab --><?php //echo $current_test_type === 'lists' ? 'nav-tab-active' : ''; ?><!--"-->
+<!--                       data-tab="lists">-->
+<!--                        Allow/Block Lists-->
+<!--                    </a>-->
                 </nav>
             </div>
 
-            <!-- IP Analysis Tab -->
+            <!-- Existing Tabs -->
             <div class="ipqs-tab-content <?php echo $current_test_type === 'ip' ? 'active' : ''; ?>" id="tab-ip">
 				<?php $this->render_ip_test_form(); ?>
             </div>
 
-            <!-- Email Validation Tab -->
             <div class="ipqs-tab-content <?php echo $current_test_type === 'email' ? 'active' : ''; ?>" id="tab-email">
 				<?php $this->render_email_test_form(); ?>
             </div>
 
-            <!-- Phone Validation Tab -->
             <div class="ipqs-tab-content <?php echo $current_test_type === 'phone' ? 'active' : ''; ?>" id="tab-phone">
 				<?php $this->render_phone_test_form(); ?>
             </div>
 
-            <!-- Data Leak Check Tab -->
             <div class="ipqs-tab-content <?php echo $current_test_type === 'leak' ? 'active' : ''; ?>" id="tab-leak">
 				<?php $this->render_leak_check_form(); ?>
             </div>
+
+            <!-- New URL Scanner Tab -->
+            <div class="ipqs-tab-content <?php echo $current_test_type === 'url' ? 'active' : ''; ?>" id="tab-url">
+				<?php $this->render_url_scanner_form(); ?>
+            </div>
+
+            <!-- New Request History Tab -->
+            <div class="ipqs-tab-content <?php echo $current_test_type === 'history' ? 'active' : ''; ?>"
+                 id="tab-history">
+				<?php $this->render_request_history(); ?>
+            </div>
+
+            <!-- New Allow/Block Lists Tab -->
+            <div class="ipqs-tab-content <?php echo $current_test_type === 'lists' ? 'active' : ''; ?>" id="tab-lists">
+				<?php $this->render_lists_management(); ?>
+            </div>
         </div>
 		<?php
+	}
+
+	/**
+	 * Render URL scanner form
+	 */
+	private function render_url_scanner_form() {
+		?>
+        <form method="post" class="ipqs-card">
+            <input type="hidden" name="test_type" value="url">
+
+            <div class="ipqs-field-group">
+                <label for="url">URL to Scan:</label>
+                <input type="url" name="url" id="url" class="regular-text" required>
+                <p class="description">Enter a URL to scan for malware, phishing, and other threats</p>
+            </div>
+
+            <div class="ipqs-field-group">
+                <h4>Scan Options:</h4>
+                <label>
+                    <input type="checkbox" name="options[]" value="malware">
+                    Check for Malware
+                </label><br>
+                <label>
+                    <input type="checkbox" name="options[]" value="phishing">
+                    Check for Phishing
+                </label>
+            </div>
+
+			<?php submit_button( 'Scan URL', 'primary', 'submit' ); ?>
+        </form>
+		<?php
+	}
+
+	/**
+	 * Render request history
+	 */
+	private function render_request_history() {
+		// Get request type and page from GET parameters
+		$request_type = $_GET['request_type'] ?? 'proxy';
+		$page         = max( 1, intval( $_GET['page'] ?? 1 ) );
+
+		try {
+			$history = $this->client->get_request_list( $request_type, [ 'page' => $page ] );
+
+			if ( is_wp_error( $history ) ) {
+				$this->render_error( $history->get_error_message() );
+
+				return;
+			}
+
+			?>
+            <div class="ipqs-card">
+                <h3>Request History</h3>
+
+                <!-- Request Type Filter -->
+                <form method="get" action="">
+                    <input type="hidden" name="page" value="ipqualityscore-tester">
+                    <input type="hidden" name="tab" value="history">
+
+                    <div class="ipqs-field-group">
+                        <label for="request_type">Request Type:</label>
+                        <select name="request_type" id="request_type">
+                            <option value="proxy" <?php selected( $request_type, 'proxy' ); ?>>Proxy Detection</option>
+                            <option value="email" <?php selected( $request_type, 'email' ); ?>>Email Validation</option>
+                            <option value="devicetracker" <?php selected( $request_type, 'devicetracker' ); ?>>Device
+                                Tracking
+                            </option>
+                            <option value="mobiletracker" <?php selected( $request_type, 'mobiletracker' ); ?>>Mobile
+                                Tracking
+                            </option>
+                        </select>
+                    </div>
+
+					<?php submit_button( 'View History', 'secondary', 'submit', false ); ?>
+                </form>
+
+                <!-- Results Table -->
+                <table class="widefat striped">
+                    <thead>
+                    <tr>
+                        <th>Request ID</th>
+                        <th>Timestamp</th>
+                        <th>Value</th>
+                        <th>Fraud Score</th>
+                        <th>Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+					<?php foreach ( $history->get_requests() as $request ): ?>
+                        <tr>
+                            <td><?php echo esc_html( $request['request_id'] ); ?></td>
+                            <td><?php echo esc_html( $request['click_date'] ); ?></td>
+                            <td>
+								<?php
+								// Handle the value display
+								$value = 'N/A';
+								if ( ! empty( $request['variables'] ) && is_array( $request['variables'] ) ) {
+									foreach ( $request['variables'] as $variable ) {
+										if ( $variable['name'] === $request_type ) {
+											$value = $variable['value'];
+											break;
+										}
+									}
+								}
+								// Fallback to email if it exists directly in the request
+								if ( $value === 'N/A' && isset( $request['email'] ) ) {
+									$value = $request['email'];
+								}
+								echo esc_html( $value );
+								?>
+                            </td>
+                            <td><?php echo isset( $request['fraud_score'] ) ? esc_html( $request['fraud_score'] ) : 'N/A'; ?></td>
+                            <td>
+                                <form method="post" style="display: inline;">
+                                    <input type="hidden" name="action" value="report_fraud">
+                                    <input type="hidden" name="request_id"
+                                           value="<?php echo esc_attr( $request['request_id'] ); ?>">
+                                    <button type="submit" class="button button-small">Report Fraud</button>
+                                </form>
+                            </td>
+                        </tr>
+					<?php endforeach; ?>
+                    </tbody>
+                </table>
+
+                <!-- Pagination -->
+				<?php if ( $history->get_total_pages() > 1 ): ?>
+                    <div class="tablenav">
+                        <div class="tablenav-pages">
+							<?php
+							echo paginate_links( [
+								'base'      => add_query_arg( [ 'paged' => '%#%', 'request_type' => $request_type ] ),
+								'format'    => '',
+								'prev_text' => __( '&laquo;' ),
+								'next_text' => __( '&raquo;' ),
+								'total'     => $history->get_total_pages(),
+								'current'   => $page
+							] );
+							?>
+                        </div>
+                    </div>
+				<?php endif; ?>
+            </div>
+			<?php
+		} catch ( Exception $e ) {
+			$this->render_error( $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Render lists management interface
+	 */
+	private function render_lists_management() {
+		?>
+        <div class="ipqs-card">
+            <h3>Allow/Block Lists Management</h3>
+
+            <!-- List Type Tabs -->
+            <div class="nav-tab-wrapper">
+                <a href="#" class="nav-tab nav-tab-active" data-list="allow">Allow List</a>
+                <a href="#" class="nav-tab" data-list="block">Block List</a>
+            </div>
+
+            <!-- Allow List Section -->
+            <div class="ipqs-list-content active" id="allow-list">
+                <h4>Add to Allow List</h4>
+                <form method="post" class="ipqs-form">
+                    <input type="hidden" name="action" value="add_allowlist">
+
+                    <div class="ipqs-field-group">
+                        <label for="allow_type">Type:</label>
+                        <select name="type" id="allow_type" required>
+                            <option value="proxy">Proxy Detection</option>
+                            <option value="url">URL Scanning</option>
+                            <option value="email">Email Validation</option>
+                            <option value="phone">Phone Validation</option>
+                        </select>
+                    </div>
+
+                    <div class="ipqs-field-group">
+                        <label for="allow_value_type">Value Type:</label>
+                        <select name="value_type" id="allow_value_type" required>
+                            <option value="ip">IP Address</option>
+                            <option value="cidr">CIDR Range</option>
+                            <option value="email">Email</option>
+                            <option value="domain">Domain</option>
+                            <option value="phone">Phone Number</option>
+                        </select>
+                    </div>
+
+                    <div class="ipqs-field-group">
+                        <label for="allow_value">Value:</label>
+                        <input type="text" name="value" id="allow_value" required>
+                    </div>
+
+                    <div class="ipqs-field-group">
+                        <label for="allow_reason">Reason (Optional):</label>
+                        <input type="text" name="reason" id="allow_reason">
+                    </div>
+
+					<?php submit_button( 'Add to Allow List' ); ?>
+                </form>
+
+                <!-- Allow List Table -->
+				<?php $this->render_list_entries( 'allow' ); ?>
+            </div>
+
+            <!-- Block List Section -->
+            <div class="ipqs-list-content" id="block-list" style="display: none;">
+                <h4>Add to Block List</h4>
+                <form method="post" class="ipqs-form">
+                    <input type="hidden" name="action" value="add_blocklist">
+
+                    <!-- Similar form fields as allow list -->
+                    <div class="ipqs-field-group">
+                        <label for="block_type">Type:</label>
+                        <select name="type" id="block_type" required>
+                            <option value="proxy">Proxy Detection</option>
+                            <option value="url">URL Scanning</option>
+                            <option value="email">Email Validation</option>
+                            <option value="phone">Phone Validation</option>
+                        </select>
+                    </div>
+
+                    <div class="ipqs-field-group">
+                        <label for="block_value_type">Value Type:</label>
+                        <select name="value_type" id="block_value_type" required>
+                            <option value="ip">IP Address</option>
+                            <option value="cidr">CIDR Range</option>
+                            <option value="email">Email</option>
+                            <option value="domain">Domain</option>
+                            <option value="phone">Phone Number</option>
+                        </select>
+                    </div>
+
+                    <div class="ipqs-field-group">
+                        <label for="block_value">Value:</label>
+                        <input type="text" name="value" id="block_value" required>
+                    </div>
+
+                    <div class="ipqs-field-group">
+                        <label for="block_reason">Reason (Optional):</label>
+                        <input type="text" name="reason" id="block_reason">
+                    </div>
+
+					<?php submit_button( 'Add to Block List' ); ?>
+                </form>
+
+                <!-- Block List Table -->
+				<?php $this->render_list_entries( 'block' ); ?>
+            </div>
+        </div>
+		<?php
+	}
+
+	/**
+	 * Render list entries table
+	 */
+	private function render_list_entries( $list_type ) {
+		try {
+			$entries = $list_type === 'allow' ?
+				$this->client->get_allowlist_entries() :
+				$this->client->get_blocklist_entries();
+
+			if ( is_wp_error( $entries ) ) {
+				$this->render_error( $entries->get_error_message() );
+
+				return;
+			}
+			?>
+            <table class="widefat striped">
+                <thead>
+                <tr>
+                    <th>Value</th>
+                    <th>Type</th>
+                    <th>Value Type</th>
+                    <th>Added</th>
+                    <th>Reason</th>
+                    <th>Actions</th>
+                </tr>
+                </thead>
+                <tbody>
+				<?php foreach ( $entries->get_entries() as $entry ): ?>
+                    <tr>
+                        <td><?php echo esc_html( $entry['value'] ); ?></td>
+                        <td><?php echo esc_html( $entry['type'] ); ?></td>
+                        <td><?php echo esc_html( $entry['value_type'] ); ?></td>
+                        <td><?php echo isset( $entry['created'] ) ? esc_html( date( 'Y-m-d H:i:s', $entry['created'] ) ) : 'N/A'; ?></td>
+                        <td><?php echo esc_html( $entry['reason'] ?? '' ); ?></td>
+                        <td>
+                            <form method="post" style="display: inline;">
+                                <input type="hidden" name="action" value="delete_<?php echo $list_type; ?>list">
+                                <input type="hidden" name="value" value="<?php echo esc_attr( $entry['value'] ); ?>">
+                                <input type="hidden" name="type" value="<?php echo esc_attr( $entry['type'] ); ?>">
+                                <input type="hidden" name="value_type"
+                                       value="<?php echo esc_attr( $entry['value_type'] ); ?>">
+                                <button type="submit" class="button button-small">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+				<?php endforeach; ?>
+                </tbody>
+            </table>
+			<?php
+		} catch ( Exception $e ) {
+			$this->render_error( $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Render URL scan results
+	 */
+	private function render_url_results( $result ) {
+		?>
+        <div class="ipqs-grid">
+            <!-- URL Status -->
+            <div class="ipqs-card">
+                <h3>URL Status</h3>
+				<?php
+				$risk_score   = $result->get_risk_score();
+				$status_class = $risk_score < 60 ? 'ipqs-status-safe' :
+					( $risk_score < 85 ? 'ipqs-status-warning' : 'ipqs-status-danger' );
+				?>
+                <span class="ipqs-status <?php echo esc_attr( $status_class ); ?>">
+                Risk Score: <?php echo esc_html( $risk_score ); ?>/100
+            </span>
+            </div>
+
+            <!-- Domain Information -->
+            <div class="ipqs-card">
+                <h3>Domain Information</h3>
+                <p>
+					<?php if ( $result->get_domain_age() ): ?>
+                        Domain Age: <?php echo esc_html( $result->get_domain_age() ); ?> days<br>
+					<?php endif; ?>
+					<?php if ( $result->get_domain_rank() ): ?>
+                        Domain Rank: <?php echo esc_html( $result->get_domain_rank() ); ?><br>
+					<?php endif; ?>
+                    DNS Valid: <span
+                            class="ipqs-status <?php echo $result->is_dns_valid() ? 'ipqs-status-safe' : 'ipqs-status-danger'; ?>">
+                    <?php echo $result->is_dns_valid() ? '✓' : '✗'; ?>
+                </span>
+                </p>
+            </div>
+
+            <!-- Risk Assessment -->
+            <div class="ipqs-card">
+                <h3>Risk Assessment</h3>
+                <ul>
+					<?php
+					$risk_factors = [
+						'suspicious' => 'Suspicious',
+						'phishing'   => 'Phishing',
+						'malware'    => 'Malware',
+						'parking'    => 'Domain Parking',
+						'spamming'   => 'Spamming'
+					];
+
+					foreach ( $risk_factors as $method => $label ) {
+						$is_method = "is_$method";
+						if ( method_exists( $result, $is_method ) ) {
+							$status       = call_user_func( [ $result, $is_method ] );
+							$status_class = $status ? 'ipqs-status-danger' : 'ipqs-status-safe';
+							?>
+                            <li>
+								<?php echo esc_html( $label ); ?>:
+                                <span class="ipqs-status <?php echo esc_attr( $status_class ); ?>">
+                                <?php echo $status ? '✗' : '✓'; ?>
+                            </span>
+                            </li>
+							<?php
+						}
+					}
+					?>
+                </ul>
+
+				<?php if ( $risk_factors = $result->get_risk_factors() ): ?>
+                    <h4>Detected Risk Factors:</h4>
+                    <ul>
+						<?php foreach ( $risk_factors as $factor ): ?>
+                            <li><?php echo esc_html( $factor ); ?></li>
+						<?php endforeach; ?>
+                    </ul>
+				<?php endif; ?>
+            </div>
+
+            <!-- URL Analysis -->
+            <div class="ipqs-card">
+                <h3>URL Analysis</h3>
+                <p>
+					<?php if ( $result->get_content_type() ): ?>
+                        Content Type: <?php echo esc_html( $result->get_content_type() ); ?><br>
+					<?php endif; ?>
+					<?php if ( $result->get_status_code() ): ?>
+                        Status Code: <?php echo esc_html( $result->get_status_code() ); ?><br>
+					<?php endif; ?>
+					<?php if ( $result->get_category() ): ?>
+                        Category: <?php echo esc_html( $result->get_category() ); ?>
+					<?php endif; ?>
+                </p>
+
+				<?php if ( $result->get_redirected_url() ): ?>
+                    <h4>Redirect Chain:</h4>
+                    <ol>
+                        <li>Original URL: <?php echo esc_url( $result->get_redirected_url() ); ?></li>
+						<?php if ( $result->get_final_url() ): ?>
+                            <li>Final URL: <?php echo esc_url( $result->get_final_url() ); ?></li>
+						<?php endif; ?>
+                    </ol>
+				<?php endif; ?>
+            </div>
+
+			<?php if ( $server = $result->get_server_details() ): ?>
+                <div class="ipqs-card">
+                    <h3>Server Details</h3>
+                    <ul>
+						<?php foreach ( $server as $key => $value ): ?>
+                            <li><?php echo esc_html( ucfirst( $key ) ); ?>: <?php echo esc_html( $value ); ?></li>
+						<?php endforeach; ?>
+                    </ul>
+                </div>
+			<?php endif; ?>
+        </div>
+		<?php
+	}
+
+	/**
+	 * Handle URL scan
+	 */
+	private function handle_url_scan() {
+		$url = sanitize_url( $_POST['url'] );
+		if ( ! filter_var( $url, FILTER_VALIDATE_URL ) ) {
+			throw new \Exception( 'Invalid URL format' );
+		}
+
+		$options = [];
+		if ( isset( $_POST['options'] ) && is_array( $_POST['options'] ) ) {
+			foreach ( $_POST['options'] as $option ) {
+				$options[ $option ] = true;
+			}
+		}
+
+		return $this->client->scan_url( $url, $options );
 	}
 
 	/**
@@ -497,12 +990,76 @@ class Plugin {
 	}
 
 	/**
-	 * Handle form submission and display results
+	 * Handle form submission and process actions
 	 */
 	private function handle_form_submission( $test_type ) {
 		try {
 			$result = null;
 
+			// Handle list management actions and fraud reporting
+			if ( isset( $_POST['action'] ) ) {
+				switch ( $_POST['action'] ) {
+					case 'add_allowlist':
+						$result = $this->handle_allowlist_add();
+						// Redirect back to lists tab
+						wp_redirect( add_query_arg( [ 'page' => 'ipqualityscore-tester', 'tab' => 'lists' ] ) );
+						exit;
+						break;
+
+					case 'delete_allowlist':
+						$result = $this->handle_allowlist_delete();
+						// Redirect back to lists tab
+						wp_redirect( add_query_arg( [ 'page' => 'ipqualityscore-tester', 'tab' => 'lists' ] ) );
+						exit;
+						break;
+
+					case 'add_blocklist':
+						$result = $this->handle_blocklist_add();
+						// Redirect back to lists tab
+						wp_redirect( add_query_arg( [ 'page' => 'ipqualityscore-tester', 'tab' => 'lists' ] ) );
+						exit;
+						break;
+
+					case 'delete_blocklist':
+						$result = $this->handle_blocklist_delete();
+						// Redirect back to lists tab
+						wp_redirect( add_query_arg( [ 'page' => 'ipqualityscore-tester', 'tab' => 'lists' ] ) );
+						exit;
+						break;
+
+					case 'report_fraud':
+						$request_id = sanitize_text_field( $_POST['request_id'] );
+						$result     = $this->client->report_request( $request_id );
+
+						if ( ! is_wp_error( $result ) ) {
+							add_settings_error(
+								'ipqualityscore_messages',
+								'report_success',
+								'Successfully reported request as fraudulent.',
+								'updated'
+							);
+						} else {
+							add_settings_error(
+								'ipqualityscore_messages',
+								'report_error',
+								'Failed to report request: ' . $result->get_error_message(),
+								'error'
+							);
+						}
+
+						// Redirect back to history tab with current request type
+						$request_type = $_GET['request_type'] ?? 'proxy';
+						wp_redirect( add_query_arg( [
+							'page'         => 'ipqualityscore-tester',
+							'tab'          => 'history',
+							'request_type' => $request_type
+						] ) );
+						exit;
+						break;
+				}
+			}
+
+			// Handle regular form submissions
 			switch ( $test_type ) {
 				case 'ip':
 					$result = $this->handle_ip_check();
@@ -516,15 +1073,77 @@ class Plugin {
 				case 'leak':
 					$result = $this->handle_leak_check();
 					break;
+				case 'url':
+					$result = $this->handle_url_scan();
+					break;
 			}
 
+			// Only render results for regular form submissions
 			if ( $result ) {
 				$this->render_results( $result, $test_type );
 			}
 
 		} catch ( \Exception $e ) {
-			$this->render_error( $e->getMessage() );
+			add_settings_error(
+				'ipqualityscore_messages',
+				'action_error',
+				$e->getMessage(),
+				'error'
+			);
+
+			// On error, redirect back to appropriate tab
+			if ( isset( $_POST['action'] ) ) {
+				$redirect_tab = strpos( $_POST['action'], 'list' ) !== false ? 'lists' : 'history';
+				wp_redirect( add_query_arg( [ 'page' => 'ipqualityscore-tester', 'tab' => $redirect_tab ] ) );
+				exit;
+			}
 		}
+	}
+
+	/**
+	 * Handle allowlist addition
+	 */
+	private function handle_allowlist_add() {
+		$value      = sanitize_text_field( $_POST['value'] );
+		$type       = sanitize_text_field( $_POST['type'] );
+		$value_type = sanitize_text_field( $_POST['value_type'] );
+		$reason     = ! empty( $_POST['reason'] ) ? sanitize_text_field( $_POST['reason'] ) : null;
+
+		return $this->client->create_allowlist_entry( $value, $type, $value_type, $reason );
+	}
+
+	/**
+	 * Handle allowlist deletion
+	 */
+	private function handle_allowlist_delete() {
+		$value      = sanitize_text_field( $_POST['value'] );
+		$type       = sanitize_text_field( $_POST['type'] );
+		$value_type = sanitize_text_field( $_POST['value_type'] );
+
+		return $this->client->delete_allowlist_entry( $value, $type, $value_type );
+	}
+
+	/**
+	 * Handle blocklist addition
+	 */
+	private function handle_blocklist_add() {
+		$value      = sanitize_text_field( $_POST['value'] );
+		$type       = sanitize_text_field( $_POST['type'] );
+		$value_type = sanitize_text_field( $_POST['value_type'] );
+		$reason     = ! empty( $_POST['reason'] ) ? sanitize_text_field( $_POST['reason'] ) : null;
+
+		return $this->client->create_blocklist_entry( $value, $type, $value_type, $reason );
+	}
+
+	/**
+	 * Handle blocklist deletion
+	 */
+	private function handle_blocklist_delete() {
+		$value      = sanitize_text_field( $_POST['value'] );
+		$type       = sanitize_text_field( $_POST['type'] );
+		$value_type = sanitize_text_field( $_POST['value_type'] );
+
+		return $this->client->delete_blocklist_entry( $value, $type, $value_type );
 	}
 
 	/**
@@ -1130,7 +1749,7 @@ class Plugin {
 	}
 
 	/**
-	 * Add JavaScript for tab functionality
+	 * Enhance JavaScript for tab functionality and dynamic form updates
 	 */
 	private function render_js() {
 		?>
@@ -1151,7 +1770,80 @@ class Plugin {
 
                     // Update hidden input
                     $('input[name="test_type"]').val(tab);
+
+                    // If this is the history tab, preserve request type from select
+                    if (tab === 'history') {
+                        var requestType = $('#request_type').val() || 'proxy';
+                        var currentUrl = new URL(window.location.href);
+                        currentUrl.searchParams.set('page', 'ipqualityscore-tester');
+                        currentUrl.searchParams.set('tab', tab);
+                        currentUrl.searchParams.set('request_type', requestType);
+                        window.history.pushState({}, '', currentUrl.toString());
+                    }
                 });
+
+                // Allow/Block list tab functionality
+                $('.ipqs-list-content:not(.active)').hide();
+                $('.nav-tab-wrapper .nav-tab').click(function (e) {
+                    e.preventDefault();
+                    var list = $(this).data('list');
+
+                    $('.nav-tab-wrapper .nav-tab').removeClass('nav-tab-active');
+                    $(this).addClass('nav-tab-active');
+
+                    $('.ipqs-list-content').hide();
+                    $('#' + list + '-list').show();
+                });
+
+                // Dynamic form field updates based on type selection
+                function updateValueTypeOptions(typeSelect, valueTypeSelect) {
+                    var type = $(typeSelect).val();
+                    var $valueType = $(valueTypeSelect);
+
+                    $valueType.empty();
+
+                    switch (type) {
+                        case 'proxy':
+                            $valueType.append(
+                                '<option value="ip">IP Address</option>' +
+                                '<option value="cidr">CIDR Range</option>' +
+                                '<option value="isp">ISP</option>'
+                            );
+                            break;
+                        case 'url':
+                            $valueType.append('<option value="domain">Domain</option>');
+                            break;
+                        case 'email':
+                            $valueType.append('<option value="email">Email Address</option>');
+                            break;
+                        case 'phone':
+                            $valueType.append('<option value="phone">Phone Number</option>');
+                            break;
+                    }
+                }
+
+                // Bind change events for type selects
+                $('#allow_type, #block_type').change(function () {
+                    var prefix = $(this).attr('id').split('_')[0];
+                    updateValueTypeOptions(this, '#' + prefix + '_value_type');
+                });
+
+                // Initialize value type options
+                updateValueTypeOptions('#allow_type', '#allow_value_type');
+                updateValueTypeOptions('#block_type', '#block_value_type');
+
+                // Report fraud functionality
+                window.reportRequest = function (requestId) {
+                    if (confirm('Are you sure you want to report this request as fraudulent?')) {
+                        $.post(ajaxurl, {
+                            action: 'ipqs_report_fraud',
+                            request_id: requestId,
+                            nonce: '<?php echo wp_create_nonce( 'ipqs_report_fraud' ); ?>'
+                        }, function (response) {
+                            alert(response.success ? 'Successfully reported as fraud' : 'Failed to report fraud');
+                        });
+                    }
+                };
             });
         </script>
 		<?php
